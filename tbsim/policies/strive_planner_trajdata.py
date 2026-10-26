@@ -239,7 +239,8 @@ class HardcodeNuscPlanner():
                 batch_agt_obs.append(cur_agt_data)
 
         batch_wstate_out = []
-        Tsteps = int(planner_t[-1] / self.cfg.dt)
+        # ceil (with tolerance) so the rollout always covers planner_t[-1]
+        Tsteps = int(np.ceil(planner_t[-1] / self.cfg.dt - 1e-6))
         output_planner_t = np.linspace(self.cfg.dt, self.cfg.dt*Tsteps, Tsteps+1)
         for b in range(self.B):
             cur_wstate_out = []
@@ -1079,13 +1080,15 @@ def process_lanegraph(nmap, res_meters, eps):
 
 
 
-def load_lane_graphs_trajdata(dataset, cache_path="~/.unified_data_cache", flip_singapore=False):    
+def load_lane_graphs_trajdata(dataset, cache_path="~/.unified_data_cache", flip_singapore=False, map_env=None):    
 
     cache_path = Path(cache_path).expanduser()
 
     map_api = MapAPI(cache_path)
     if dataset=='nuplan':
-        maps = {map_name: map_api.get_map('nuplan_mini:{}'.format(map_name)) for map_name in ["boston", "singapore", "pittsburgh", "las_vegas"]}
+        # maps are cached per trajdata env (nuplan_mini / nuplan_val / ...)
+        map_env = map_env or 'nuplan_mini'
+        maps = {map_name: map_api.get_map('{}:{}'.format(map_env, map_name)) for map_name in ["boston", "singapore", "pittsburgh", "las_vegas"]}
     elif dataset=='nuscenes':
         maps = {map_name: map_api.get_map('nusc_trainval:{}'.format(map_name)) for map_name in ["boston-seaport", "singapore-onenorth", "singapore-hollandvillage", "singapore-queenstown"]}
     

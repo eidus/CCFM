@@ -212,7 +212,11 @@ class StrivePolicy_trajdata(PolicyComposer):
     def get_policy(self, policy=None):
         env = getattr(self.eval_config, "env", "nusc")
         dataset = "nuplan" if env == "nuplan" else "nuscenes"
-        policy = StrivePlanner_trajdata(self.device, dataset=dataset)
+        map_env = None
+        if env == "nuplan":
+            map_env = self.eval_config.nuplan_eval_data.split("-")[0]
+        # dt is re-set from the agent model's step_time in run_adv_simulation
+        policy = StrivePlanner_trajdata(self.device, dataset=dataset, map_env=map_env)
         return policy, None
 
 class Hierarchical(PolicyComposer):

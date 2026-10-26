@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+third_party/
+*.ckpt
+*.hdf5
+outputs/
+results/
+wandb/
+NUPLAN_EVAL_NOTES.md

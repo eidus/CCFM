@@ -528,14 +528,31 @@ class IDMPlanner(Policy):
             
 
 class StrivePlanner_trajdata(Policy):
-    def __init__(self, device, dt=0.1, dataset='nuscenes', *args, **kwargs):
+    def __init__(self, device, dt=0.1, dataset='nuscenes', map_env=None, *args, **kwargs):
         super(StrivePlanner_trajdata, self).__init__(device)
 
         # Load Lane Graphs
-        lane_graphs = load_lane_graphs_trajdata(dataset)
+        lane_graphs = load_lane_graphs_trajdata(dataset, map_env=map_env)
         # Instantiate Planner
         self.cfg = DEF_CONFIG
         self.planner = HardcodeNuscPlanner(lane_graphs, PlannerConfig(**self.cfg))
+        self.set_dt(dt)
+
+    def set_dt(self, dt):
+        """Set the simulation step (s) of the returned plan.
+
+        The planner itself always rolls out at cfg['dt'] (0.2s); the plan is
+        returned at `dt`, covering the same horizon as the 10Hz default
+        (output_len * 0.1s).
+        """
+        self.dt = float(dt)
+        if abs(self.dt - 0.1) < 1e-6:
+            self.output_len = self.cfg["output_len"]
+        else:
+            assert self.dt >= self.cfg["dt"] - 1e-6, \
+                f"StrivePlanner_trajdata supports dt=0.1 or dt>={self.cfg['dt']}, got {self.dt}"
+            horizon_sec = self.cfg["output_len"] * 0.1
+            self.output_len = max(1, int(np.floor(horizon_sec / self.dt + 1e-6)))
                 
     def eval(self):
         pass
@@ -549,12 +566,13 @@ class StrivePlanner_trajdata(Policy):
   
     def get_action(self, obs_dict, **kwargs):
         batch_size = obs_dict["agent_hist"].shape[0]
-        plan_batch = torch.zeros((batch_size, self.cfg["output_len"], 4)) #x,y,z,h
+        plan_batch = torch.zeros((batch_size, self.output_len, 4)) #x,y,z,h
         
         for i in range(batch_size):
             map_name = obs_dict["map_names"][i].split(':')[1]
             
-            hist_len =  self.cfg["hist_len"] 
+            # index of the current frame (history frames + current)
+            hist_len =  obs_dict["agent_hist"].shape[-2] - 1
             fut_len =  self.cfg["fut_len"] 
             num_neighbors = obs_dict["num_neigh"][i]
 
@@ -626,7 +644,11 @@ class StrivePlanner_trajdata(Policy):
             # agent_obs[:,10:] = 0.0
             
             agent_ptr = np.array([0,len(agent_obs)])
-            planner_t = agent_t
+            legacy_10hz = abs(self.dt - 0.1) < 1e-6
+            if legacy_10hz:
+                planner_t = agent_t
+            else:
+                planner_t = np.round(self.dt * np.arange(1, self.output_len + 1), 6)
             plan = self.planner.rollout(agent_obs, agent_t, agent_ptr, planner_t)
 
             #transform back to agent centric
@@ -637,6 +659,10 @@ class StrivePlanner_trajdata(Policy):
             #transform the c,s,xd,yd without displacement
             agent_from_world_rotate = self.get_rotation_matrix(agent_from_world)
             plan[...,2:4] = transform_points_tensor(plan[...,2:4], agent_from_world_rotate)
+            if not legacy_10hz:
+                # planner already evaluated at the simulation timestamps
+                plan_batch[i] = plan[0]
+                continue
             # Interpolation: Add a zero pad at the start and compute averages between consecutive points
             plan_padded = torch.cat((torch.zeros_like(plan[:, :1]), plan), dim=1)  # Shape: (batch, L+1, channels)
             interpolated_plan = (plan_padded[:, :-1] + plan_padded[:, 1:]) / 2  # Shape: (batch, L, channels)

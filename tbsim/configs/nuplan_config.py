@@ -56,6 +56,26 @@ class NuplanTrainConfig(TrainConfig):
         self.validation.num_steps_per_epoch = 50
 
 
+class NuplanFullTrainConfig(NuplanTrainConfig):
+    """Full nuPlan v1.1 (train/val logs under <data_dir>/trainval).
+
+    --dataset_path may point at the devkit root (the directory containing
+    `nuplan-v1.1/` and `maps/`); see _resolve_nuplan_data_dir.
+    Restrict to cities with e.g. "nuplan_train-boston" (comma-separated
+    via scripts/train.py --trajdata_source_train).
+    """
+    def __init__(self):
+        super(NuplanFullTrainConfig, self).__init__()
+        self.trajdata_source_train = "nuplan_train"
+        self.trajdata_source_valid = "nuplan_val"
+        self.trajdata_source_root = "nuplan_train"
+        # preprocessing/caching workers for the (large) first cache build
+        self.trajdata_num_workers = 32
+        # needs WANDB_API_KEY (docker/launch.sh passes the repo's .env)
+        self.logging.log_wandb = True
+        self.logging.wandb_project_name = "ccfm_nuplan"
+
+
 class NuplanEnvConfig(EnvConfig):
     def __init__(self):
         super(NuplanEnvConfig, self).__init__()

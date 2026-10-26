@@ -16,6 +16,7 @@ from tbsim.configs.nusc_config import (
 
 from tbsim.configs.nuplan_config import (
     NuplanTrainConfig,
+    NuplanFullTrainConfig,
     NuplanEnvConfig
 )
 from tbsim.configs.algo_config import (
@@ -25,6 +26,7 @@ from tbsim.configs.algo_config import (
     DiffSceneConfig,
     BehaviorCloningECConfig,
     FlowmatchingTrafficConfig,
+    FlowmatchingTrafficDt05Config,
     SpatialPlannerConfig,
     BehaviorCloningGCConfig,
     AgentPredictorConfig,
@@ -162,6 +164,20 @@ EXP_CONFIG_REGISTRY["nuplan_diffscene"] = ExperimentConfig(
     env_config=NuplanEnvConfig(),
     algo_config=DiffSceneConfig(),
     registered_name="nuplan_diffscene"    
+)
+
+EXP_CONFIG_REGISTRY["nuplan_flowmatching"] = ExperimentConfig(
+    train_config=NuplanFullTrainConfig(),
+    env_config=NuplanEnvConfig(),
+    algo_config=FlowmatchingTrafficConfig(),
+    registered_name="nuplan_flowmatching"
+)
+
+EXP_CONFIG_REGISTRY["nuplan_flowmatching_dt05"] = ExperimentConfig(
+    train_config=NuplanFullTrainConfig(),
+    env_config=NuplanEnvConfig(),
+    algo_config=FlowmatchingTrafficDt05Config(),
+    registered_name="nuplan_flowmatching_dt05"
 )
 
 EXP_CONFIG_REGISTRY["closedloop_training"] = ExperimentConfig(

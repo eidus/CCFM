@@ -205,11 +205,11 @@ def rollout_episodes(
                     ego_idx=ego_global,
                     adv_idx=adv_global,
                     collision_type=manual_ctype,
-                    T_collision=15,
+                    T_collision=int(round(1.5 / ccfm_config.get("dt", 0.1))),
                     obs_dict={"extent": extents},
                     conflict_point=None,
                 )
-                cc["dt"] = 0.1
+                cc["dt"] = ccfm_config.get("dt", 0.1)
                 _apply_ccfm_collision_overrides(cc)
                 env.current_collision_config = cc
                 control_config.guide_config.collision_config = cc

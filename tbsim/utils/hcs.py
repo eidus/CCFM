@@ -28,6 +28,8 @@ class HCS:
         w_control: float = 0.0,
         w_legality: float = 0.30,
         verbose: bool = False,
+        dt: float = 0.1,
+        horizon: int = 32,
     ):
         total = w_reach + w_geometry + w_control + w_legality
         self.w_reach = w_reach / total
@@ -35,6 +37,9 @@ class HCS:
         self.w_control = w_control / total
         self.w_legality = w_legality / total
         self.verbose = verbose
+        # simulation step (s) and FM horizon (frames) for T_collision estimates
+        self.dt = dt
+        self.horizon = horizon
 
     # ------------------------------------------------------------------
     # Main entry points
@@ -178,7 +183,8 @@ class HCS:
         # / CUT_IN / HEAD_ON are overridden to a fixed value in
         # ccfm_guidance._update_T_collision).
         T_collision = self.compute_T_collision(
-            ego_state, candidate_states[best_local], best_type, conflict_point
+            ego_state, candidate_states[best_local], best_type, conflict_point,
+            dt=self.dt, horizon=self.horizon,
         )
         details["T_collision"] = T_collision
 

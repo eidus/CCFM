@@ -1559,7 +1559,7 @@ class EnvSplitUnifiedSimulation(EnvUnifiedSimulation):
                 from tbsim.utils.collision_constraints import CollisionType
                 ctype = CollisionType.REAR_END
                 score = 0.0
-                details = {"T_collision": 20, "conflict_point": None}
+                details = {"T_collision": int(round(2.0 / getattr(hcs, "dt", 0.1))), "conflict_point": None}
                 print(f"  [CCFM] Fallback: closest agent local={adv_batch_idx} "
                       f"(global={local_indices[adv_batch_idx]})")
 
@@ -1570,7 +1570,7 @@ class EnvSplitUnifiedSimulation(EnvUnifiedSimulation):
             new_ctrl_indices.append([local_ctrl_idx])
 
             # Build collision_config
-            T_collision = details.get("T_collision", 20)
+            T_collision = details.get("T_collision", int(round(2.0 / getattr(hcs, "dt", 0.1))))
             conflict_point = details.get("conflict_point")
 
             cc = build_collision_config_from_obs(
@@ -1581,7 +1581,7 @@ class EnvSplitUnifiedSimulation(EnvUnifiedSimulation):
                 obs_dict={"extent": extents},
                 conflict_point=conflict_point,
             )
-            cc["dt"] = 0.1
+            cc["dt"] = getattr(hcs, "dt", 0.1)
             collision_configs.append(cc)
 
         self.batch_ctrl_indices = new_batch_ctrl

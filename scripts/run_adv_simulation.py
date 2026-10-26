@@ -149,6 +149,38 @@ def build_dual_policies(eval_cfg, device, modify_cfg):
 # ------------------------------------------------------------------
 # The primary function that 1)intilize the scene and 2)runs simulation
 # ------------------------------------------------------------------
+def load_scene_names(path):
+    """Scene names from a CSV (`scene_name` column) or a JSON list, in file order."""
+    if path is None:
+        raise ValueError("--scene_select_mode=names needs --scene_names_file")
+    if path.endswith(".csv"):
+        import csv
+        with open(path) as f:
+            return [row["scene_name"] for row in csv.DictReader(f)]
+    with open(path) as f:
+        names = json.load(f)
+    if not isinstance(names, list):
+        raise ValueError(f"{path}: expected a JSON list of scene names")
+    return names
+
+
+def scene_indices_from_names(env, names):
+    """Map scene names to indices of the env dataset's scene index.
+
+    Indices depend on the dataset's history/future/filter settings, so a list of
+    indices from another codebase points at different scenes; names do not.
+    """
+    # cache layout: <cache>/<env>/<scene name>/scene_metadata_dt<dt>.dill
+    index_of = {os.path.basename(os.path.dirname(str(p))): i
+                for i, p in enumerate(env.dataset._scene_index)}
+    missing = [n for n in names if n not in index_of]
+    if missing:
+        raise ValueError(f"{len(missing)} of {len(names)} scenes are not in the eval dataset "
+                         f"(e.g. {missing[:3]}); check --nuplan_eval_data and the history/future "
+                         f"lengths, which drop scenes too short for them")
+    return [index_of[n] for n in names]
+
+
 def run_adv_simulation(eval_cfg,
                        data_to_disk,
                        render_to_video,
@@ -167,7 +199,8 @@ def run_adv_simulation(eval_cfg,
                        show_trajectories=True,
                        show_trail=False,
                        start_frame=None,
-                       hcs_fixed_ttc=None):
+                       hcs_fixed_ttc=None,
+                       scene_names_file=None):
     """
     Run adversarial simulation with configurable parameters, plus
     environment and policy building in the same style you previously used.
@@ -251,6 +284,20 @@ def run_adv_simulation(eval_cfg,
     # dual policies for ego and agents:
     else:
         policy, agent_policy, exp_config = build_dual_policies(eval_cfg, device, modify_cfg)
+    # Simulation step = step_time of the agent model (the env is built from its config).
+    sim_dt = float(exp_config.algo.step_time) if exp_config is not None else 0.1
+    sim_future_frames = int(exp_config.algo.future_num_frames) if exp_config is not None else 32
+    sim_history_frames = int(exp_config.algo.history_num_frames) if exp_config is not None else 10
+    print(f"[sim] dt={sim_dt}s, history={sim_history_frames} frames, future={sim_future_frames} frames")
+    if eval_cfg.agent_eval_class is not None:
+        # The ego policy is built before the agent config is known (dt=0.1 default).
+        ego_inner = policy
+        if isinstance(policy, Pos2YawWrapper):
+            policy._dt = sim_dt
+            ego_inner = policy.policy
+        if hasattr(ego_inner, "set_dt"):
+            ego_inner.set_dt(sim_dt)
+
     if eval_cfg.env in ["nusc","drivesim","nuplan"]:
         if eval_cfg.agent_eval_class is not None:
             rollout_policy = RolloutWrapper(ego_policy=policy, agents_policy=agent_policy)
@@ -267,6 +314,17 @@ def run_adv_simulation(eval_cfg,
    
     # Prepare the scene selection
     env, eval_scenes, predefined_init = build_environment_and_scenes(eval_cfg, exp_config, device, agent_policy, import_scene_list_mode, split_dataset=split_dataset)
+    if import_scene_list_mode == "all":
+        # Evenly spaced subset of --num_scenes_to_evaluate scenes over the whole
+        # split (full nuplan_val is far too large to simulate exhaustively).
+        total_scenes = env._num_total_scenes
+        n = min(int(eval_cfg.num_scenes_to_evaluate), total_scenes)
+        eval_scenes = sorted(set(np.linspace(0, total_scenes - 1, n).round().astype(int).tolist()))
+        print(f"[all] {len(eval_scenes)} of {total_scenes} scenes")
+    if import_scene_list_mode == "names":
+        eval_scenes = scene_indices_from_names(env, load_scene_names(scene_names_file))
+        eval_cfg.num_scenes_to_evaluate = len(eval_scenes)
+        print(f"[names] {len(eval_scenes)} scenes from {scene_names_file}")
 
     # --split_dataset: set up sliding windows.
     # Use the scene list from scene_select_mode (predefined list) and apply
@@ -275,27 +333,32 @@ def run_adv_simulation(eval_cfg,
     if split_dataset:
         PREDEFINED_LIST_MODES = {
             "test", "test_auto", "debug", "ttc", "partial_diffusion",
-            "collision", "collision_all", "human", "resume",
+            "collision", "collision_all", "human", "resume", "names",
         }
-        if import_scene_list_mode not in PREDEFINED_LIST_MODES:
+        if import_scene_list_mode not in PREDEFINED_LIST_MODES and import_scene_list_mode != "all":
             total_scenes = env._num_total_scenes
             eval_scenes = list(range(total_scenes))
         predefined_init = None  # use HCS for dynamic adv selection
-        # Sliding windows: env-dependent.
-        # - nuScenes (20s scenes): 3 windows at [10, 70, 130], 70 steps each.
-        # - nuPlan   (15s scenes): 2 windows at [10, 80],      70 steps each.
-        eval_cfg.num_simulation_steps = 70
+        # Sliding windows (defined in seconds, converted with sim_dt): env-dependent.
+        # - nuScenes (20s scenes): 3 windows at [1, 7, 13]s, 7s each.
+        # - nuPlan   (15s scenes): 2 windows at [1, 8]s,     7s each.
+        # At dt=0.1 this is frames [10, 70, 130] / [10, 80] with 70 steps.
+        # The first window never starts before a full history is available.
+        def _sec2frames(sec):
+            return int(round(sec / sim_dt))
+        first_start = max(_sec2frames(1.0), sim_history_frames)
+        eval_cfg.num_simulation_steps = _sec2frames(7.0)
         if eval_cfg.env == "nuplan":
             eval_cfg.start_frame_index_each_episode = [
-                10,   # Window 1: frames 10-80  (1-8s)
-                80,   # Window 2: frames 80-150 (8-15s)
+                first_start,        # Window 1: 1-8s  (at dt=0.1)
+                _sec2frames(8.0),   # Window 2: 8-15s
             ]
             eval_cfg.num_episode_repeats = 2
         else:
             eval_cfg.start_frame_index_each_episode = [
-                10,   # Window 1: frames 10-80   (1-8s)
-                70,   # Window 2: frames 70-140  (7-14s)
-                130,  # Window 3: frames 130-200 (13-20s)
+                first_start,        # Window 1: 1-8s  (at dt=0.1)
+                _sec2frames(7.0),   # Window 2: 7-14s
+                _sec2frames(13.0),  # Window 3: 13-20s
             ]
             eval_cfg.num_episode_repeats = 3
         eval_cfg.num_scenes_to_evaluate = len(eval_scenes)
@@ -339,6 +402,7 @@ def run_adv_simulation(eval_cfg,
             "freq": hcs_freq,
             "use_ego_plan": hcs_egoplan,
             "fixed_ttc": hcs_fixed_ttc,
+            "dt": sim_dt,
         }
         if hcs_collision_type is not None:
             # Manual mode: skip HCS, use specified collision type
@@ -348,7 +412,8 @@ def run_adv_simulation(eval_cfg,
         else:
             # Auto mode: use HCS
             from tbsim.utils.hcs import HCS
-            ccfm_config["hcs"] = HCS(verbose=(import_scene_list_mode in ["test", "test_auto"]))
+            ccfm_config["hcs"] = HCS(verbose=(import_scene_list_mode in ["test", "test_auto"]),
+                                     dt=sim_dt, horizon=sim_future_frames)
             print(f"CCFM enabled (auto HCS): mode={hcs_mode}, freq={hcs_freq}")
 
     # --fm_guidance: always force FM gradient-only guidance (no GN projection),
@@ -359,9 +424,10 @@ def run_adv_simulation(eval_cfg,
                 "mode": hcs_mode,
                 "freq": hcs_freq,
                 "use_ego_plan": hcs_egoplan,
+                "dt": sim_dt,
             }
             from tbsim.utils.hcs import HCS
-            ccfm_config["hcs"] = HCS(verbose=False)
+            ccfm_config["hcs"] = HCS(verbose=False, dt=sim_dt, horizon=sim_future_frames)
         ccfm_config["skip_projection"] = True
         ccfm_config["fm_guidance_fns"] = fm_guidance
         print(f"FM gradient guidance (no GN): fns={fm_guidance}, mode={hcs_mode}, freq={hcs_freq}")
@@ -545,6 +611,9 @@ def add_simulation_args(parser):
                        help="A string that uniquely identifies a checkpoint file within a directory, e.g., iter50000")
     parser.add_argument("--dataset_path", type=str, default=None,
                        help="Root directory of the dataset")
+    parser.add_argument("--nuplan_eval_data", type=str, default=None,
+                       help="trajdata query for --env=nuplan, e.g. 'nuplan_mini-mini_val' (default) "
+                            "or 'nuplan_val' / 'nuplan_val-boston' for full nuPlan")
     parser.add_argument("--num_scenes_per_batch", type=int, default=None,
                        help="Number of scenes to run concurrently (to accelerate eval)")
     parser.add_argument("--results_root_dir", type=str, required=True,
@@ -565,7 +634,10 @@ def add_simulation_args(parser):
                        help="whether to evaluate the model")
     parser.add_argument("--data_filter_fn", type=str, choices=["has_lane"], default="")
     parser.add_argument("--scene_select_mode", type=str, default="no_collision",
-                       choices=["human", "ttc", "partial_diffusion", "no_collision", "collision", "collision_all", "test", "test_auto", "debug", "resume"])
+                       choices=["human", "ttc", "partial_diffusion", "no_collision", "collision", "collision_all", "test", "test_auto", "debug", "resume", "all", "names"])
+    parser.add_argument("--scene_names_file", type=str, default=None,
+                       help="with --scene_select_mode=names: CSV with a `scene_name` column or a JSON "
+                            "list of trajdata scene names (<log>=<token>), evaluated in that order")
     parser.add_argument("--visualize-diffusion", action="store_true",
                        help="whether to evaluate the model")
     parser.add_argument("--sim-steps", type=int, default=100)
@@ -665,6 +737,8 @@ def main():
 
     if args.dataset_path is not None:
         cfg.dataset_path = args.dataset_path
+    if args.nuplan_eval_data is not None:
+        cfg.nuplan_eval_data = args.nuplan_eval_data
 
     if cfg.name is None:
         cfg.name = cfg.eval_class
@@ -742,6 +816,7 @@ def main():
         show_trajectories=not args.no_trajectories,
         show_trail=args.show_trail,
         start_frame=args.start_frame,
+        scene_names_file=args.scene_names_file,
     )
 
     print("Simulation completed successfully!")

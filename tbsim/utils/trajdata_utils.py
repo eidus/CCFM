@@ -739,9 +739,9 @@ from typing import Union
 def get_full_fut_traj(element: Union[AgentBatchElement, SceneBatchElement]):
     """Get mask for moving agents.
     """
-    fut_sec = 20
-    dt = 0.1
-    T = int(fut_sec / dt)
+    fut_sec = 20.0
+    dt = float(getattr(element, "dt", 0.1))
+    T = int(round(fut_sec / dt))
     if isinstance(element, AgentBatchElement):
         # (T, 8), (T)
         fut_traj, _ = element.get_agent_future(element.agent_info, (fut_sec, fut_sec))
@@ -772,8 +772,8 @@ def get_full_fut_valid(element: Union[AgentBatchElement, SceneBatchElement]):
     """Get mask for moving agents.
     """
     fut_sec = 20.0
-    dt = 0.1
-    T = int(fut_sec / dt)
+    dt = float(getattr(element, "dt", 0.1))
+    T = int(round(fut_sec / dt))
     if isinstance(element, AgentBatchElement):
         # (T, 3)
         _, fut_valid = element.get_agent_future(element.agent_info, (fut_sec, fut_sec))

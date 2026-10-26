@@ -20,6 +20,7 @@ from tbsim.utils.config_utils import  translate_trajdata_cfg
 import tbsim.envs.env_metrics as EnvMetrics
 from tbsim.evaluation.metric_composers import CVAEMetrics, OccupancyMetrics
 from tbsim.utils.trajdata_utils import get_full_fut_traj,get_full_fut_valid, get_stationary_mask
+from tbsim.datasets.trajdata_datamodules import _resolve_nuplan_data_dir
 # from tbsim.l5kit.l5_ego_dataset import EgoDatasetMixed
 
 from trajdata.custom_func.get_lane_info import get_lane_info
@@ -70,7 +71,8 @@ class EnvironmentBuilder(object):
             real_histogram_file = "path/to/nuscene_gt/hist_stats.json"
         if os.path.exists(real_histogram_file):
             metrics["all_realism_deviation"] = EnvMetrics.RealismDeviationMetrics(
-                real_histogram_file=real_histogram_file
+                real_histogram_file=real_histogram_file,
+                dt=float(self.exp_cfg.algo.step_time),
             )
         return metrics
     def _get_agent2ego_metrics(self):
@@ -110,24 +112,6 @@ class EnvironmentBuilder(object):
 
     def get_env(self):
         raise NotImplementedError
-
-
-def _resolve_nuplan_data_dir(dataset_path: str) -> str:
-    """
-    Accept either the nuPlan root (containing `maps/` and `nuplan-v1.1/`) or the
-    already-narrowed database directory. trajdata's nuPlan adapter expects the
-    DBs under `<data_dir>/mini`, which for the standard mini layout means
-    `<root>/nuplan-v1.1/splits`.
-    """
-    path = Path(dataset_path).expanduser()
-
-    if (path / "nuplan-v1.1" / "splits" / "mini").is_dir():
-        return str(path / "nuplan-v1.1" / "splits")
-
-    if (path / "splits" / "mini").is_dir():
-        return str(path / "splits")
-
-    return str(path)
 
 
 class EnvNuscBuilder(EnvironmentBuilder):
@@ -244,15 +228,18 @@ class EnvNuplanBuilder(EnvironmentBuilder):
         history_sec = data_cfg.history_num_frames * data_cfg.step_time
         neighbor_distance = data_cfg.max_agents_distance
         nuplan_data_dir = _resolve_nuplan_data_dir(data_cfg.dataset_path)
+        # e.g. "nuplan_mini-mini_val" (default) or "nuplan_val" for full nuPlan
+        nuplan_eval_data = self.eval_cfg.nuplan_eval_data
+        nuplan_env_name = nuplan_eval_data.split("-")[0]
 
         kwargs = dict(
-            desired_data=["nuplan_mini-mini_val"], #["val"]
+            desired_data=[nuplan_eval_data],
             future_sec=(future_sec, future_sec),
             history_sec=(history_sec, history_sec),
             # history_sec=(10.0, 10.0),
             ego_only=True,
             data_dirs={
-                "nuplan_mini": nuplan_data_dir,
+                nuplan_env_name: nuplan_data_dir,
             },
             only_types=[AgentType.VEHICLE],
             agent_interaction_distances=defaultdict(lambda: neighbor_distance),

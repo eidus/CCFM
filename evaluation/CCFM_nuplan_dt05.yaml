@@ -1,0 +1,3 @@
+planner:
+  ckpt_dir: path/to/flowmatching_nuplan_dt05_checkpoint   # FM agent checkpoint dir (nuplan_flowmatching_dt05)
+  ckpt_key: 18000

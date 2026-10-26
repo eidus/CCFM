@@ -872,8 +872,9 @@ from trajdata.simulation.sim_stats import calc_stats
 
 
 class RealismDeviationMetrics(EnvMetrics):
-    def __init__(self, real_histogram_file: str = "path/to/gt/hist_stats.json"):
+    def __init__(self, real_histogram_file: str = "path/to/gt/hist_stats.json", dt: float = 0.1):
         super().__init__()
+        self.dt = dt
         self.bins = {
             "velocity": torch.linspace(0, 30, 21),
             "lon_accel": torch.linspace(0, 10, 21),
@@ -964,7 +965,7 @@ class RealismDeviationMetrics(EnvMetrics):
                 continue
 
             # Compute statistics for the scene
-            sim_stats = calc_stats(positions=scene_centroids, heading=scene_yaws, dt=0.1, bins=self.bins)
+            sim_stats = calc_stats(positions=scene_centroids, heading=scene_yaws, dt=self.dt, bins=self.bins)
 
             # Normalize histograms and compute Wasserstein distance
             def compute_wasserstein_distance_for_key(key: str) -> float:

@@ -280,9 +280,10 @@ class CCFMGuidanceFunction:
         #   - adv@T and ego@T evaluated at the SAME moment (no ego_target_pos
         #     override) → real collision, no ghost / chase-ego-current issues.
         if ctype in {CollisionType.REAR_END, CollisionType.CUT_IN, CollisionType.HEAD_ON, CollisionType.SIDE}:
-            T_MIN = 5      # 0.5s  — adv needs some planning headroom
-            T_MAX = 10     # 1.0s  — don't push constraint past effective horizon
-            T_dyn = 10     # default if geometry / yaws unavailable
+            dt = self.collision_config.get("dt", 0.1)
+            T_MIN = max(1, int(round(0.5 / dt)))  # 0.5s — adv needs some planning headroom
+            T_MAX = max(T_MIN, int(round(1.0 / dt)))  # 1.0s — don't push constraint past effective horizon
+            T_dyn = T_MAX  # default if geometry / yaws unavailable
 
             if data_batch_for_guidance is not None:
                 world_pos = data_batch_for_guidance.get("world_positions")
@@ -290,7 +291,6 @@ class CCFMGuidanceFunction:
                 world_yaw = data_batch_for_guidance.get("world_yaws")
                 ego_idx = self.collision_config.get("ego_idx", 0)
                 adv_idx = self.collision_config.get("adv_idx", 1)
-                dt = self.collision_config.get("dt", 0.1)
 
                 if (world_pos is not None and world_spd is not None
                         and world_yaw is not None
@@ -374,7 +374,7 @@ class CCFMGuidanceFunction:
             # NEW: fix adv's optimization horizon at 15, store the ego waypoint
             # separately so the constraint compares adv_traj[15] against
             # ego_plan[min_idx] (decoupled horizons).
-            FIXED_T_ADV = 15
+            FIXED_T_ADV = int(round(1.5 / dt))  # 1.5s (15 frames at 10Hz)
             self.collision_config["T_collision"] = min(FIXED_T_ADV, horizon - 1)
             self.collision_config["conflict_point"] = cp.detach()
 

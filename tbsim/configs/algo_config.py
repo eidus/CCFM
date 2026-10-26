@@ -327,7 +327,38 @@ class FlowmatchingTrafficConfig(AlgoConfig):
         self.guide_config.params.num_samples = self.diffuse_config.num_samples
         self.guide_config.params.sample_step = self.diffuse_config.sample_step
         # `sampling_mode` / diffusion-specific flags are intentionally omitted for FM.
-        
+
+
+class FlowmatchingTrafficDt05Config(FlowmatchingTrafficConfig):
+    """Flow matching at 2 Hz (dt=0.5s), e.g. for nuPlan.
+
+    history: 4 frames (2.0s), future: 8 frames (4.0s).
+    future_num_frames must be divisible by 4 (UNet with dim_mults=(1, 2, 4)
+    downsamples the horizon twice).
+    """
+    def __init__(self):
+        super(FlowmatchingTrafficDt05Config, self).__init__()
+        self.step_time = 0.5
+        self.history_num_frames = 4
+        self.history_num_frames_ego = 4
+        self.history_num_frames_agents = 4
+        self.future_num_frames = 8
+        assert self.future_num_frames % 4 == 0
+
+        self.horizon = self.future_num_frames
+        self.diffuse_config.num_points = self.horizon
+
+        # (accel, yaw_rate) normalization. The values below are the nuScenes
+        # 10Hz statistics and only a starting point: recompute them for the
+        # target dataset/dt with scripts/compute_fm_action_stats.py and paste
+        # the output here before training.
+        self.nusc_norm_info = {
+            "flow_matching": [
+                [0.024830, -0.00003],   # mean: [accel_mean, yaw_rate_mean]
+                [1.092723, 0.06560],    # std:  [accel_std,  yaw_rate_std]
+            ]
+        }
+
 
 class DiffSceneConfig(AlgoConfig):
     def __init__(self):

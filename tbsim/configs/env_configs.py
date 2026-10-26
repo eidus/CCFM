@@ -90,6 +90,16 @@ def get_eval_scenes_and_predefined_init(
     elif import_scene_list_mode == "collision":
         eval_scenes = [SCENE_IDX_MAP[sn] for sn in PREDEFINED_SCENE_INIT.keys()]
         new_predef_init = PREDEFINED_SCENE_INIT
+    elif import_scene_list_mode == "names":
+        # Scenes given by name (--scene_names_file); mapped to dataset indices
+        # after the env is built.
+        eval_scenes = None
+        new_predef_init = None
+    elif import_scene_list_mode == "all":
+        # Every scene of the loaded split (resolved after the env is built);
+        # use this for splits without a predefined scene list (e.g. nuplan_val).
+        eval_scenes = None
+        new_predef_init = None
     elif import_scene_list_mode == "collision_all":
         # Use all 150 predefined collision scenes with dynamic adv selection
         eval_scenes = [SCENE_IDX_MAP[sn] for sn in PREDEFINED_SCENE_ALL_INIT.keys()]

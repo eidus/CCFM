@@ -1,4 +1,5 @@
 import argparse
+import json
 import sys
 import os
 import socket
@@ -298,10 +299,30 @@ def main(cfg, auto_remove_exp_dir=False, debug=False, resume_ckpt_path=None):
         print("Tensorboard event will be saved at {}".format(logger.log_dir))
     else:
         print("WARNING: not logging training stats")
+    if not debug and cfg.train.logging.log_wandb:
+        if os.environ.get("WANDB_API_KEY"):
+            from pytorch_lightning.loggers import WandbLogger
+            # fixed id per run dir, so a resumed run continues the same wandb run
+            run_id = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{cfg.name}_{version_key}")
+            wandb_logger = WandbLogger(
+                project=cfg.train.logging.wandb_project_name,
+                name=cfg.name,
+                id=run_id,
+                resume="allow",
+                save_dir=os.path.join(root_dir, version_key),
+                config=cfg.to_dict(),
+            )
+            logger = [logger, wandb_logger] if logger is not None else wandb_logger
+            print("wandb: project {}, run {}".format(cfg.train.logging.wandb_project_name, run_id))
+        else:
+            print("WARNING: log_wandb is set but WANDB_API_KEY is not, skipping wandb")
     if logger is not None:
         train_callbacks.append(pl.callbacks.LearningRateMonitor(logging_interval="step"))
 
     # Train
+    # max_steps / the lr schedule / checkpoints count optimizer steps; validation
+    # is scheduled in batches, so scale it to keep the same optimizer-step period
+    accumulate = int(cfg.train.training.get("accumulate_grad_batches", 1))
     trainer = pl.Trainer(
         default_root_dir=root_dir,
         # checkpointing
@@ -312,8 +333,9 @@ def main(cfg, auto_remove_exp_dir=False, debug=False, resume_ckpt_path=None):
         log_every_n_steps=cfg.train.logging.log_every_n_steps,
         # training
         max_steps=cfg.train.training.num_steps,
+        accumulate_grad_batches=accumulate,
         # validation
-        val_check_interval=cfg.train.validation.every_n_steps,
+        val_check_interval=cfg.train.validation.every_n_steps * accumulate,
         limit_val_batches=cfg.train.validation.num_steps_per_epoch,
         # all callbacks
         callbacks=train_callbacks,
@@ -359,6 +381,55 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="(optional) if provided, override the dataset root path",
+    )
+
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="(optional) override the global seed (cfg.seed)",
+    )
+
+    parser.add_argument(
+        "--num_gpus",
+        type=int,
+        default=None,
+        help="(optional) override cfg.devices.num_gpus",
+    )
+
+    parser.add_argument("--batch_size", type=int, default=None,
+                        help="(optional) override train.training.batch_size (total, split across GPUs)")
+    parser.add_argument("--num_steps", type=int, default=None,
+                        help="(optional) override train.training.num_steps")
+    parser.add_argument("--accumulate_grad_batches", type=int, default=None,
+                        help="(optional) gradient accumulation; --batch_size is then the per-step "
+                             "micro-batch, so the effective batch is batch_size * this")
+    parser.add_argument("--lr", type=float, default=None,
+                        help="(optional) override the initial policy learning rate")
+    parser.add_argument("--num_data_workers", type=int, default=None,
+                        help="(optional) override train.training.num_data_workers")
+
+    parser.add_argument(
+        "--fm_norm_json",
+        type=str,
+        default=None,
+        help="(optional) json from scripts/compute_fm_action_stats.py --out_json; "
+        "overrides algo.nusc_norm_info for flow matching",
+    )
+
+    parser.add_argument(
+        "--trajdata_source_train",
+        type=str,
+        default=None,
+        help="(optional) override train.trajdata_source_train; comma-separated trajdata queries, "
+        "e.g. 'nuplan_train-boston,nuplan_train-pittsburgh'",
+    )
+
+    parser.add_argument(
+        "--trajdata_source_valid",
+        type=str,
+        default=None,
+        help="(optional) override train.trajdata_source_valid; comma-separated, e.g. 'nuplan_val'",
     )
 
     parser.add_argument(
@@ -419,6 +490,35 @@ if __name__ == "__main__":
 
     if args.dataset_path is not None:
         default_config.train.dataset_path = args.dataset_path
+
+    def _split_sources(x):
+        parts = [p.strip() for p in x.split(",") if p.strip()]
+        return parts[0] if len(parts) == 1 else parts
+
+    if args.seed is not None:
+        default_config.seed = args.seed
+    if args.num_gpus is not None:
+        default_config.devices.num_gpus = args.num_gpus
+    if args.batch_size is not None:
+        default_config.train.training.batch_size = args.batch_size
+    if args.num_steps is not None:
+        default_config.train.training.num_steps = args.num_steps
+    if args.accumulate_grad_batches is not None:
+        default_config.train.training.accumulate_grad_batches = args.accumulate_grad_batches
+    if args.lr is not None:
+        default_config.algo.optim_params.policy.learning_rate.initial = args.lr
+    if args.num_data_workers is not None:
+        default_config.train.training.num_data_workers = args.num_data_workers
+    if args.fm_norm_json is not None:
+        with open(args.fm_norm_json, "r") as f:
+            norm = json.load(f)
+        default_config.algo.nusc_norm_info = {"flow_matching": [norm["mean"], norm["std"]]}
+        print(f"FM action normalization from {args.fm_norm_json}: {norm}")
+
+    if args.trajdata_source_train is not None:
+        default_config.train.trajdata_source_train = _split_sources(args.trajdata_source_train)
+    if args.trajdata_source_valid is not None:
+        default_config.train.trajdata_source_valid = _split_sources(args.trajdata_source_valid)
 
     if args.output_dir is not None:
         default_config.root_dir = os.path.abspath(args.output_dir)

@@ -1,0 +1,7 @@
+.git
+img
+**/__pycache__
+*.ckpt
+outputs
+results
+.env

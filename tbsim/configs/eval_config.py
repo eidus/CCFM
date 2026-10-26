@@ -10,6 +10,8 @@ class EvaluationConfig(Dict):
         self.name = None
         self.env = "nusc"  # [l5kit, nusc]
         self.dataset_path = None
+        # trajdata query for env=nuplan, e.g. "nuplan_mini-mini_val" or "nuplan_val"
+        self.nuplan_eval_data = "nuplan_mini-mini_val"
         self.eval_class = ""
         self.seed = 0
         self.num_scenes_per_batch = 1

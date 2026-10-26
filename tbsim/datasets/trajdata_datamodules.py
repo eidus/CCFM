@@ -32,15 +32,29 @@ def _as_list(x: Any) -> List[Any]:
 
 
 def _resolve_nuplan_data_dir(dataset_path: str) -> str:
+    """Return the directory trajdata expects as the nuPlan data_dir.
+
+    trajdata reads `<data_dir>/mini/*.db` (nuplan_mini) or
+    `<data_dir>/trainval/*.db` (nuplan_train/val) and maps from
+    `<data_dir>/../maps`. Accepts the devkit root, `nuplan-v1.1/`, or the
+    `splits/` directory itself.
+    """
     path = Path(dataset_path).expanduser()
 
-    if (path / "nuplan-v1.1" / "splits" / "mini").is_dir():
-        return str(path / "nuplan-v1.1" / "splits")
-
-    if (path / "splits" / "mini").is_dir():
-        return str(path / "splits")
+    for cand in (
+        path / "nuplan-v1.1" / "splits",
+        path / "splits",
+        path / "nuplan-v1.1",
+        path,
+    ):
+        if (cand / "mini").is_dir() or (cand / "trainval").is_dir():
+            return str(cand)
 
     return str(path)
+
+
+def _is_nuplan_env_name(tok: str) -> bool:
+    return tok in {"nuplan_mini", "nuplan_train", "nuplan_val", "nuplan_test"}
 
 
 def _infer_data_dirs(
@@ -71,9 +85,22 @@ def _infer_data_dirs(
         return tok.endswith(("_train", "_val", "_test"))
 
     for s in sources:
-        if not isinstance(s, str) or "-" not in s:
+        if not isinstance(s, str):
             continue
         tokens = [t for t in s.split("-") if t]
+        # nuPlan env names end with _train/_val/_test, so they would be
+        # mistaken for split tokens below.
+        nuplan_envs = [t for t in tokens if _is_nuplan_env_name(t)]
+        if nuplan_envs:
+            # Remaining tokens are splits/locations (e.g. "nuplan_train-boston"),
+            # not dataset ids.
+            for tok in nuplan_envs:
+                # translate_trajdata_cfg pre-fills {root: dataset_path}; resolve it too
+                if resolved_dataset_path and data_dirs.get(tok) in (None, dataset_path):
+                    data_dirs[tok] = resolved_dataset_path
+            continue
+        if "-" not in s:
+            continue
         dataset_tokens = [t for t in tokens if not _is_split_token(t)]
         for dataset_id in dataset_tokens:
             target_path = resolved_dataset_path
@@ -111,6 +138,13 @@ class UnifiedDataModule(pl.LightningDataModule):
         )
 
     def setup(self, stage: Optional[str] = None):
+        if self.train_dataset is None and (stage is None or stage == "fit"):
+            self.train_dataset = self.build_dataset("train")
+            if bool(self._train_config.validation.enabled):
+                self.valid_dataset = self.build_dataset("valid")
+
+    def build_dataset(self, split: str):
+        """UnifiedDataset for trajdata_source_{train,valid} (also builds its cache)."""
         if UnifiedDataset is None:  # pragma: no cover
             raise ImportError(
                 "trajdata is required for UnifiedDataModule; install the modified trajdata repo."
@@ -187,9 +221,8 @@ class UnifiedDataModule(pl.LightningDataModule):
             obs_format="x,y,z,xd,yd,xdd,ydd,s,c",
         )
 
-        if self.train_dataset is None and (stage is None or stage == "fit"):
-            self.train_dataset = UnifiedDataset(desired_data=train_sources, **common_kwargs)
-            self.valid_dataset = UnifiedDataset(desired_data=valid_sources, **common_kwargs)
+        sources = train_sources if split == "train" else valid_sources
+        return UnifiedDataset(desired_data=sources, **common_kwargs)
 
     def train_dataloader(self):
         if self.train_dataset is None:

@@ -119,6 +119,67 @@ Checkpoints, TensorBoard logs, and visualizations are written under
 `--output_dir`. Point `evaluation/CCFM.yaml` at the resulting checkpoint before
 running the simulation.
 
+### Full nuPlan at dt=0.5s
+
+Config `nuplan_flowmatching_dt05`: 2 Hz, history 4 frames (2s), future 8
+frames (4s), trained on `nuplan_train` and validated on `nuplan_val`.
+
+1. Unpack the nuPlan v1.1 DB zips and `nuplan-maps-v1.0.zip` into the trajdata
+   layout (`<OUT>/nuplan-v1.1/trainval/*.db`, `<OUT>/maps/`):
+   `bash scripts/prepare_nuplan.sh` (see the header for `ZIP_DIR`, `OUT`,
+   `DELETE_ZIP`, and picking individual parts).
+2. Recompute the action normalization for nuPlan @ 0.5s and paste it into
+   `FlowmatchingTrafficDt05Config` in `tbsim/configs/algo_config.py`:
+   `python scripts/compute_fm_action_stats.py --config_name nuplan_flowmatching_dt05 --dataset_path <OUT>`
+3. `bash train_nuplan_dt05.sh` (`--trajdata_source_train nuplan_train-boston,...`
+   restricts training to some cities).
+4. Point `evaluation/CCFM_nuplan_dt05.yaml` at the checkpoint and run
+   `bash nuplan_simulation_dt05.sh`. The simulation step follows the agent
+   model's `step_time`, so `--sim-steps`, `--n_step_action`, `--hcs_freq`,
+   `--start_frame` and `--hcs_fixed_ttc` are counted in 0.5s frames.
+
+#### Without docker (venv)
+
+`requirements-lock.txt` pins the package set of `docker/Dockerfile`, the image
+the dt=0.5 runs were trained in. `scripts/setup_venv.sh` builds a Python 3.8
+venv from it (torch 2.4.1 + CUDA 12.1 wheels, nuplan-devkit and the modified
+trajdata at fixed commits under `third_party/`):
+
+```bash
+bash scripts/setup_venv.sh            # -> .venv (fetches Python 3.8 with uv if missing)
+source .venv/bin/activate
+```
+
+`docker/run_seeds.sh` runs the whole pipeline in the venv too (it activates
+`.venv`, or `$VENV`, when no venv is active). With a copied
+trajdata cache (`~/.unified_data_cache` holding `nuplan_train` and
+`nuplan_val`) the cache build is skipped, and only `<DATASET>/maps` plus an
+empty `<DATASET>/nuplan-v1.1/trainval` are needed. The action normalization
+the runs were trained with is in `stats/`, so every seed uses the same one.
+For example seeds 1 and 2 on GPU 3:
+
+```bash
+CUDA_VISIBLE_DEVICES=3 NUM_GPUS=1 SEEDS="1 2" GRAD_ACCUM=4 NUM_DATA_WORKERS=64 \
+  DATASET=/path/to/nuplan/dataset OUT=/path/to/outputs bash docker/run_seeds.sh
+```
+
+`GRAD_ACCUM` keeps the effective batch (`BATCH_SIZE`, 2560) and the step count /
+lr of the 80 GB runs and only splits each step into micro-batches: 2560 needs
+~63 GB, 1280 (`GRAD_ACCUM=2`) peaked at 36.4 GB, so use `GRAD_ACCUM=4` (640) on
+40 GB GPUs. `WANDB_API_KEY` is read from `.env` in the repo root when present.
+
+#### Evaluation on the 512 nuplan_test scenes
+
+`eval_config/eval_scenes_512.csv` lists the 512 nuPlan test scenes used for
+the CTG++ baseline. Scenes are selected **by name**
+(`--scene_select_mode=names --scene_names_file=...`): `eval_scenes` indices
+from another codebase point at different scenes, because the dataset's scene
+index depends on its history/future settings. The CTG++ setup starts at data
+frame 7 and runs 30 steps of 0.5s (`--start_frame=7 --sim-steps=30`); step 3
+of `docker/run_seeds.sh` runs exactly this for every seed. For
+`--nuplan_eval_data=nuplan_test` the cache needs `nuplan_test` as well
+(`python scripts/cache_nuplan_incremental.py --parts test ...`).
+
 ---
 
 ## 4. Running the Simulation
