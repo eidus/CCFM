@@ -4,6 +4,7 @@ import sys
 import os
 import socket
 import re
+import time
 
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -302,8 +303,17 @@ def main(cfg, auto_remove_exp_dir=False, debug=False, resume_ckpt_path=None):
     if not debug and cfg.train.logging.log_wandb:
         if os.environ.get("WANDB_API_KEY"):
             from pytorch_lightning.loggers import WandbLogger
-            # fixed id per run dir, so a resumed run continues the same wandb run
-            run_id = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{cfg.name}_{version_key}")
+            # id stored in the run dir, so a resumed run continues the same wandb run;
+            # the timestamp keeps it unique (wandb never reuses the id of a deleted run)
+            id_file = os.path.join(root_dir, version_key, "wandb_id")
+            if os.path.exists(id_file):
+                with open(id_file) as f:
+                    run_id = f.read().strip()
+            else:
+                stamp = time.strftime("%Y%m%d_%H%M%S")
+                run_id = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{cfg.name}_{version_key}_{stamp}")
+                with open(id_file, "w") as f:
+                    f.write(run_id)
             wandb_logger = WandbLogger(
                 project=cfg.train.logging.wandb_project_name,
                 name=cfg.name,
